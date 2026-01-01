@@ -1,0 +1,65 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir build && cd build
+          cmake ..
+          make
+          tar -czvf hello-linux-x64.tar.gz hello
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-linux-x64
+          path: build/hello-linux-x64.tar.gz
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir build && cd build
+          cmake ..
+          cmake --build . --config Release
+          Compress-Archive -Path Release/hello.exe -DestinationPath hello-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-windows-x64
+          path: build/hello-windows-x64.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          mkdir build && cd build
+          cmake ..
+          make
+          tar -czvf hello-macos-arm64.tar.gz hello
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-macos-arm64
+          path: build/hello-macos-arm64.tar.gz
+
+  release:
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            hello-linux-x64/hello-linux-x64.tar.gz
+            hello-windows-x64/hello-windows-x64.zip
+            hello-macos-arm64/hello-macos-arm64.tar.gz
