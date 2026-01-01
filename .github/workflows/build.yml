@@ -1,113 +1,133 @@
-
-# build.yml 修复版 - GitHub Actions 工作流配置
-# 这是一个完整的 CI/CD 构建配置文件示例
-
-build_yml_content = """name: Build and Deploy
+name: Super Build Matrix
 
 on:
   push:
     branches: [ main, develop ]
+    tags:
+      - "v*"
   pull_request:
     branches: [ main ]
 
 env:
-  NODE_VERSION: '18.x'
   REGISTRY: ghcr.io
+  NODE_VERSION: "18.x"
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    
+  build-matrix:
+    name: Build on ${{ matrix.os }} / ${{ matrix.arch }} / ${{ matrix.toolchain }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - ubuntu-22.04
+          - macos-15
+          - macos-15-arm64
+          - windows-2025
+          - windows-2022
+        arch:
+          - amd64
+          - arm64
+        toolchain:
+          - gcc
+          - clang
+          - cross-arm
+          - cross-aarch64
+          - cross-riscv64
+          - cross-mips
+          - cross-ppc64le
+          - wasm
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-      
+          cache: npm
+
       - name: Install dependencies
         run: npm ci
-      
-      - name: Run linter
-        run: npm run lint --if-present
-      
-      - name: Run tests
-        run: npm test --if-present
-      
-      - name: Build project
-        run: npm run build --if-present
-      
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        if: always()
-      
-      - name: Build Docker image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+      - name: Install cross toolchains
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
-          docker build -t ${{ env.REGISTRY }}/${{ github.repository }}:latest .
-      
-      - name: Login to Container Registry
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: docker/login-action@v2
+          sudo apt-get update
+          case "${{ matrix.toolchain }}" in
+            cross-arm)
+              sudo apt-get install -y gcc-arm-linux-gnueabihf ;;
+            cross-aarch64)
+              sudo apt-get install -y gcc-aarch64-linux-gnu ;;
+            cross-riscv64)
+              sudo apt-get install -y gcc-riscv64-linux-gnu ;;
+            cross-mips)
+              sudo apt-get install -y gcc-mips-linux-gnu ;;
+            cross-ppc64le)
+              sudo apt-get install -y gcc-powerpc64le-linux-gnu ;;
+            wasm)
+              sudo apt-get install -y clang lld binaryen wasm-tools ;;
+          esac
+
+      - name: Build project
+        run: |
+          echo "Building for ${{ matrix.arch }} using ${{ matrix.toolchain }}"
+          npm run build --if-present
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.toolchain }}
+          path: dist/
+
+  docker-multiarch:
+    name: Build & Push Multi-Arch Docker Image
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Push Docker image
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: |
-          docker push ${{ env.REGISTRY }}/${{ github.repository }}:latest
 
-  deploy:
-    needs: build
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Push Multi-Arch Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ github.repository }}:latest
+            ${{ env.REGISTRY }}/${{ github.repository }}:${{ github.ref_name }}
+          platforms: linux/amd64,linux/arm64
+
+  release:
+    name: Publish Release
+    needs: [build-matrix]
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+    if: startsWith(github.ref, 'refs/tags/v')
+
     steps:
-      - name: Deploy to production
-        run: echo "Deploying to production..."
-      
-      - name: Notify deployment
-        run: echo "Deployment complete"
-"""
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./release-assets
 
-# 输出修复要点说明
-print("=" * 60)
-print("build.yml 修复版 - 关键改进点")
-print("=" * 60)
-print()
-
-print("✓ 工作流触发条件:")
-print("  - push: main 和 develop 分支")
-print("  - pull_request: main 分支")
-print()
-
-print("✓ 构建任务 (build job):")
-print("  - 检出代码")
-print("  - 配置 Node.js 环境")
-print("  - 安装依赖 (使用 npm ci)")
-print("  - 运行代码检查 (lint)")
-print("  - 运行测试")
-print("  - 构建项目")
-print("  - 上传测试覆盖率")
-print()
-
-print("✓ Docker 部署 (仅在主分支):")
-print("  - 构建 Docker 镜像")
-print("  - 登录容器仓库")
-print("  - 推送镜像")
-print()
-
-print("✓ 部署任务 (deploy job):")
-print("  - 依赖 build job 成功完成")
-print("  - 仅在主分支推送时执行")
-print()
-
-print("=" * 60)
-print("build.yml 完整配置内容:")
-print("=" * 60)
-print(build_yml_content)
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ./release-assets/**
